@@ -1,397 +1,292 @@
 import streamlit as st
-import numpy as np
-import cv2
-import tensorflow as tf
-from tensorflow import keras
-from tensorflow.keras.applications.xception import preprocess_input as xception_preprocess
-from tensorflow.keras.applications.inception_v3 import preprocess_input as inception_preprocess
-from tensorflow.keras.models import load_model
-import tempfile
-import os
+import requests
+import io
 from PIL import Image
-import matplotlib.pyplot as plt
+from gradio_client import Client
 import time
-import pandas as pd
-import plotly.express as px
-from sklearn.model_selection import train_test_split
-from lime import lime_image
-from skimage.segmentation import mark_boundaries
+import os
 
 # Set page configuration
 st.set_page_config(
-    page_title="DeepFake Detection",
-    page_icon="🕵️",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    page_title="Image Generation Studio",
+    page_icon="🎨",
+    layout="wide"
 )
 
-# Constants
-IMG_SIZE = 224
-MAX_SEQ_LENGTH = 20
-NUM_FEATURES = 2048
-BATCH_SIZE = 64
-EPOCHS = 10
-
-# Helper functions
-def crop_center_square(frame):
-    y, x = frame.shape[0:2]
-    min_dim = min(y, x)
-    start_x = (x // 2) - (min_dim // 2)
-    start_y = (y // 2) - (min_dim // 2)
-    return frame[start_y : start_y + min_dim, start_x : start_x + min_dim]
-
-def load_video(path, max_frames=0, resize=(IMG_SIZE, IMG_SIZE)):
-    cap = cv2.VideoCapture(path)
-    frames = []
-    try:
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
-            frame = crop_center_square(frame)
-            frame = cv2.resize(frame, resize)
-            frame = frame[:, :, [2, 1, 0]]
-            frames.append(frame)
-
-            if len(frames) == max_frames:
-                break
-    finally:
-        cap.release()
-    return np.array(frames)
-
-def prepare_single_video(frames, feature_extractor):
-    frames = frames[None, ...]
-    frame_mask = np.zeros(shape=(1, MAX_SEQ_LENGTH,), dtype="bool")
-    frame_features = np.zeros(shape=(1, MAX_SEQ_LENGTH, NUM_FEATURES), dtype="float32")
-
-    for i, batch in enumerate(frames):
-        video_length = batch.shape[0]
-        length = min(MAX_SEQ_LENGTH, video_length)
-        for j in range(length):
-            frame_features[i, j, :] = feature_extractor.predict(batch[None, j, :])
-        frame_mask[i, :length] = 1  # 1 = not masked, 0 = masked
-
-    return frame_features, frame_mask
-
+# Initialize the client
 @st.cache_resource
-def load_image_model():
-    # Load the pre-trained Xception model for image detection
-    model = load_model('xception_deepfake_image.h5')
-    return model
+def get_client():
+    return Client("https://c452d26a281d4a0cde.gradio.live/")
 
-@st.cache_resource
-def load_video_models():
-    # Load the feature extractor and sequence model for video detection
-    feature_extractor = keras.applications.InceptionV3(
-        weights="imagenet",
-        include_top=False,
-        pooling="avg",
-        input_shape=(IMG_SIZE, IMG_SIZE, 3),
-    )
-    
-    # Create the sequence model (same architecture as in training)
-    frame_features_input = keras.Input((MAX_SEQ_LENGTH, NUM_FEATURES))
-    mask_input = keras.Input((MAX_SEQ_LENGTH,), dtype="bool")
-    
-    x = keras.layers.GRU(16, return_sequences=True)(
-        frame_features_input, mask=mask_input
-    )
-    x = keras.layers.GRU(8)(x)
-    x = keras.layers.Dropout(0.4)(x)
-    x = keras.layers.Dense(8, activation="relu")(x)
-    output = keras.layers.Dense(1, activation="sigmoid")(x)
-    
-    model = keras.Model([frame_features_input, mask_input], output)
-    model.compile(loss="binary_crossentropy", optimizer="adam", metrics=["accuracy"])
-    
-    # Load weights if available
+# Function to generate image
+def generate_image(client, prompt, negative_prompt, style, aspect_ratio, 
+                  performance, image_number, seed, use_random_seed):
     try:
-        model.load_weights('video_model_weights.h5')
-    except:
-        st.warning("Video model weights not found. Using randomly initialized weights.")
-    
-    return feature_extractor, model
+        # Prepare parameters for the main generation function (fn_index=67)
+        params = {
+            "Generate Image Grid for Each Batch": True,
+            "parameter_12": prompt,
+            "Negative Prompt": negative_prompt,
+            "Selected Styles": [style] if style else [],
+            "Performance": performance,
+            "Aspect Ratios": aspect_ratio,
+            "Image Number": image_number,
+            "Output Format": "png",
+            "Seed": seed if not use_random_seed else str(time.time()).replace('.', '')[:10],
+            "Read wildcards in order": True,
+            "Image Sharpness": 0.5,
+            "Guidance Scale": 4.0,
+            "Base Model (SDXL only)": "juggernautXL_v8Rundiffusion.safetensors",
+            "Refiner (SDXL or SD 1.5)": "None",
+            "Refiner Switch At": 0.8,
+            "Enable_1": True,
+            "LoRA 1": "None",
+            "Weight_1": 0.0,
+            "Enable_2": True,
+            "LoRA 2": "None",
+            "Weight_2": 0.0,
+            "Enable_3": True,
+            "LoRA 3": "None",
+            "Weight_3": 0.0,
+            "Enable_4": True,
+            "LoRA 4": "None",
+            "Weight_4": 0.0,
+            "Enable_5": True,
+            "LoRA 5": "None",
+            "Weight_5": 0.0,
+            "Input Image": False,
+            "parameter_212": "",
+            "Upscale or Variation:": "Disabled",
+            "Image_1": None,
+            "Outpaint Direction": [],
+            "Image_2": None,
+            "Inpaint Additional Prompt": "",
+            "Image_3": None,
+            "Mask Upload": None,
+            "Disable Preview": False,
+            "Disable Intermediate Results": False,
+            "Disable seed increment": True,
+            "Black Out NSFW": True,
+            "Positive ADM Guidance Scaler": 1.0,
+            "Negative ADM Guidance Scaler": 1.0,
+            "ADM Guidance End At Step": 0.5,
+            "CFG Mimicking from TSNR": 1.0,
+            "CLIP Skip": 1,
+            "Sampler": "euler",
+            "Scheduler": "normal",
+            "VAE": "Default (model)",
+            "Forced Overwrite of Sampling Step": -1,
+            "Forced Overwrite of Refiner Switch Step": -1,
+            "Forced Overwrite of Generating Width": -1,
+            "Forced Overwrite of Generating Height": -1,
+            "Forced Overwrite of Denoising Strength of \"Vary\"": -1,
+            "Forced Overwrite of Denoising Strength of \"Upscale\"": -1,
+            "Mixing Image Prompt and Vary/Upscale": True,
+            "Mixing Image Prompt and Inpaint": True,
+            "Debug Preprocessors": True,
+            "Skip Preprocessors": True,
+            "Canny Low Threshold": 1,
+            "Canny High Threshold": 1,
+            "Refiner swap method": "joint",
+            "Softness of ControlNet": 0.0,
+            "Enabled_ControlNet": True,
+            "B1": 0,
+            "B2": 0,
+            "S1": 0,
+            "S2": 0,
+            "Debug Inpaint Preprocessing": True,
+            "Disable initial latent in inpaint": True,
+            "Inpaint Engine": "None",
+            "Inpaint Denoising Strength": 0.0,
+            "Inpaint Respective Field": 0.0,
+            "Enable Advanced Masking Features": True,
+            "Invert Mask When Generating": True,
+            "Mask Erode or Dilate": -64,
+            "Save only final enhanced image": True,
+            "Save Metadata to Images": True,
+            "Metadata Scheme": "fooocus",
+            "Image_4": None,
+            "Stop At_1": 0.0,
+            "Weight_1_1": 0.0,
+            "Type_1": "ImagePrompt",
+            "Image_5": None,
+            "Stop At_2": 0.0,
+            "Weight_2_1": 0.0,
+            "Type_2": "ImagePrompt",
+            "Image_6": None,
+            "Stop At_3": 0.0,
+            "Weight_3_1": 0.0,
+            "Type_3": "ImagePrompt",
+            "Image_7": None,
+            "Stop At_4": 0.0,
+            "Weight_4_1": 0.0,
+            "Type_4": "ImagePrompt",
+            "Debug GroundingDINO": True,
+            "GroundingDINO Box Erode or Dilate": -64,
+            "Debug Enhance Masks": True,
+            "Use with Enhance, skips image generation": None,
+            "Enhance": False,
+            "Upscale or Variation:_1": "Disabled",
+            "Order of Processing": "Before First Enhancement",
+            "Prompt": "Original Prompts",
+            "Enable_Enhance_1": True,
+            "Detection prompt_1": "",
+            "Enhancement positive prompt": "",
+            "Enhancement negative prompt": "",
+            "Mask generation model_1": "u2net",
+            "Cloth category_1": "full",
+            "SAM model_1": "vit_b",
+            "Text Threshold_1": 0.0,
+            "Box Threshold_1": 0.0,
+            "Maximum number of detections_1": 0,
+            "Disable initial latent in inpaint_1": True,
+            "Inpaint Engine_1": "None",
+            "Inpaint Denoising Strength_1": 0.0,
+            "Inpaint Respective Field_1": 0.0,
+            "Mask Erode or Dilate_1": -64,
+            "Invert Mask_1": True,
+            "Enable_Enhance_2": True,
+            "Detection prompt_2": "",
+            "Enhancement positive prompt_1": "",
+            "Enhancement negative prompt_1": "",
+            "Mask generation model_2": "u2net",
+            "Cloth category_2": "full",
+            "SAM model_2": "vit_b",
+            "Text Threshold_2": 0.0,
+            "Box Threshold_2": 0.0,
+            "Maximum number of detections_2": 0,
+            "Disable initial latent in inpaint_2": True,
+            "Inpaint Engine_2": "None",
+            "Inpaint Denoising Strength_2": 0.0,
+            "Inpaint Respective Field_2": 0.0,
+            "Mask Erode or Dilate_2": -64,
+            "Invert Mask_2": True,
+            "Enable_Enhance_3": True,
+            "Detection prompt_3": "",
+            "Enhancement positive prompt_2": "",
+            "Enhancement negative prompt_2": "",
+            "Mask generation model_3": "u2net",
+            "Cloth category_3": "full",
+            "SAM model_3": "vit_b",
+            "Text Threshold_3": 0.0,
+            "Box Threshold_3": 0.0,
+            "Maximum number of detections_3": 0,
+            "Disable initial latent in inpaint_3": True,
+            "Inpaint Engine_3": "None",
+            "Inpaint Denoising Strength_3": 0.0,
+            "Inpaint Respective Field_3": 0.0,
+            "Mask Erode or Dilate_3": -64,
+            "Invert Mask_3": True,
+        }
+        
+        result = client.predict(
+            fn_index=67,
+            **params
+        )
+        
+        return result
+    except Exception as e:
+        st.error(f"Error generating image: {str(e)}")
+        return None
 
-# Function to explain predictions using LIME
-def explain_prediction_lime(model, image):
-    explainer = lime_image.LimeImageExplainer()
-    
-    # Resize image to model input size
-    img = np.array(image)
-    if img.shape[0] != IMG_SIZE or img.shape[1] != IMG_SIZE:
-        img = cv2.resize(img, (IMG_SIZE, IMG_SIZE))
-    
-    # Explain prediction
-    explanation = explainer.explain_instance(
-        img.astype('double'), 
-        model.predict,  
-        top_labels=2, 
-        hide_color=0, 
-        num_samples=1000
-    )
-    
-    # Get image and mask
-    temp, mask = explanation.get_image_and_mask(
-        explanation.top_labels[0], 
-        positive_only=True, 
-        num_features=5, 
-        hide_rest=True
-    )
-    
-    return mark_boundaries(temp / 255.0, mask)
+# Function to get available styles
+def get_available_styles(client):
+    try:
+        # This function (fn_index=35) returns available styles
+        styles = client.predict(fn_index=35)
+        return styles
+    except Exception as e:
+        st.error(f"Error fetching styles: {str(e)}")
+        return []
 
 # Main app
 def main():
-    st.title("🕵️ DeepFake Detection App")
-    st.markdown("""
-    This application uses deep learning models to detect fake images and videos created using AI technology.
-    Upload an image or video to check if it's real or fake.
-    """)
+    client = get_client()
     
-    # Load models
-    with st.spinner("Loading models... This may take a moment."):
-        image_model = load_image_model()
-        video_feature_extractor, video_model = load_video_models()
+    st.title("🎨 Image Generation Studio")
+    st.markdown("Generate images using advanced AI models")
     
-    # Sidebar navigation
-    st.sidebar.title("Navigation")
-    app_mode = st.sidebar.selectbox("Choose the app mode", ["Image Detection", "Video Detection", "About"])
+    # Sidebar for settings
+    st.sidebar.title("Settings")
     
-    if app_mode == "Image Detection":
-        st.header("DeepFake Image Detection")
-        st.markdown("""
-        Upload an image to check if it's real or fake. The model uses a fine-tuned Xception architecture
-        trained on deepfake images.
-        """)
-        
-        # File uploader
-        uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "jpeg", "png"])
-        
-        if uploaded_file is not None:
-            # Display the image
-            image = Image.open(uploaded_file)
-            st.image(image, caption='Uploaded Image', use_column_width=True)
-            
-            # Preprocess the image
-            img_array = np.array(image)
-            if img_array.shape[0] != IMG_SIZE or img_array.shape[1] != IMG_SIZE:
-                img_array = cv2.resize(img_array, (IMG_SIZE, IMG_SIZE))
-            
-            img_array = xception_preprocess(img_array)
-            img_array = np.expand_dims(img_array, axis=0)
-            
-            # Make prediction
-            with st.spinner("Analyzing image..."):
-                prediction = image_model.predict(img_array)[0][0]
-                confidence = prediction if prediction > 0.5 else 1 - prediction
-                label = "FAKE" if prediction > 0.5 else "REAL"
-                
-                # Display results
-                st.subheader("Prediction Results")
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    st.metric("Prediction", label)
-                    st.metric("Confidence", f"{confidence:.2%}")
-                
-                with col2:
-                    # Create a gauge chart
-                    fig = px.bar(
-                        x=["REAL", "FAKE"], 
-                        y=[1-prediction, prediction],
-                        color=["REAL", "FAKE"],
-                        color_discrete_map={"REAL": "green", "FAKE": "red"},
-                        labels={'x': 'Class', 'y': 'Probability'},
-                        title="Prediction Confidence"
-                    )
-                    st.plotly_chart(fig, use_container_width=True)
-                
-                # Explain prediction
-                st.subheader("Explainable AI")
-                if st.button("Explain Prediction"):
-                    with st.spinner("Generating explanation..."):
-                        explanation_img = explain_prediction_lime(image_model, image)
-                        st.image(explanation_img, caption="Areas contributing to the prediction", use_column_width=True)
-                        st.markdown("""
-                        The highlighted areas show which parts of the image most influenced the model's decision.
-                        This helps understand what features the model considers when detecting deepfakes.
-                        """)
+    # Text inputs
+    prompt = st.text_area("Prompt", "A beautiful landscape with mountains and a lake", height=100)
+    negative_prompt = st.text_area("Negative Prompt", "blurry, low quality", height=50)
     
-    elif app_mode == "Video Detection":
-        st.header("DeepFake Video Detection")
-        st.markdown("""
-        Upload a video to check if it's real or fake. The model uses a combination of CNN (InceptionV3) 
-        for feature extraction and RNN (GRU) for temporal analysis.
-        """)
-        
-        # File uploader
-        uploaded_file = st.file_uploader("Choose a video...", type=["mp4", "mov", "avi"])
-        
-        if uploaded_file is not None:
-            # Save the uploaded file temporarily
-            with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
-                tmp_file.write(uploaded_file.read())
-                video_path = tmp_file.name
-            
-            # Display the video
-            st.video(uploaded_file)
-            
-            # Process the video
-            with st.spinner("Processing video... This may take a while."):
-                # Load video frames
-                frames = load_video(video_path, max_frames=MAX_SEQ_LENGTH)
-                
-                # Extract features and prepare for prediction
-                frame_features, frame_mask = prepare_single_video(frames, video_feature_extractor)
-                
-                # Make prediction
-                prediction = video_model.predict([frame_features, frame_mask])[0][0]
-                confidence = prediction if prediction > 0.5 else 1 - prediction
-                label = "FAKE" if prediction > 0.5 else "REAL"
-                
-                # Display results
-                st.subheader("Prediction Results")
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    st.metric("Prediction", label)
-                    st.metric("Confidence", f"{confidence:.2%}")
-                
-                with col2:
-                    # Create a gauge chart
-                    fig = px.bar(
-                        x=["REAL", "FAKE"], 
-                        y=[1-prediction, prediction],
-                        color=["REAL", "FAKE"],
-                        color_discrete_map={"REAL": "green", "FAKE": "red"},
-                        labels={'x': 'Class', 'y': 'Probability'},
-                        title="Prediction Confidence"
-                    )
-                    st.plotly_chart(fig, use_container_width=True)
-                
-                # Display sample frames
-                st.subheader("Sample Frames from Video")
-                num_frames = min(6, len(frames))
-                cols = st.columns(num_frames)
-                
-                for i, col in enumerate(cols):
-                    col.image(frames[i], caption=f"Frame {i+1}", use_column_width=True)
-                
-                # Clean up
-                os.unlink(video_path)
+    # Get available styles
+    with st.spinner("Loading available styles..."):
+        available_styles = get_available_styles(client)
     
-    elif app_mode == "About":
-        st.header("About DeepFake Detection")
-        st.markdown("""
-        ## What are DeepFakes?
-        DeepFakes are synthetic media in which a person in an existing image or video is replaced with 
-        someone else's likeness using artificial intelligence techniques.
-        
-        ## How This App Works
-        This application uses two different deep learning approaches to detect deepfakes:
-        
-        ### Image Detection
-        - Uses a fine-tuned Xception model (a CNN architecture)
-        - Trained on a dataset of real and fake faces
-        - Achieves approximately 82% accuracy in detecting fake images
-        
-        ### Video Detection
-        - Uses a combination of CNN and RNN architectures:
-          - **CNN (InceptionV3)**: Extracts features from individual video frames
-          - **RNN (GRU)**: Analyzes temporal patterns across frames
-        - Processes up to 20 frames per video
-        - Achieves approximately 80% accuracy in detecting fake videos
-        
-        ## Limitations
-        - The models may not detect all types of deepfakes, especially newer, more sophisticated ones
-        - Video processing requires significant computational resources
-        - The accuracy may vary depending on the quality and type of deepfake
-        
-        ## Ethical Considerations
-        This tool is intended for educational and research purposes. Always consider the ethical implications 
-        of deepfake detection technology and use it responsibly.
-        """)
-
-        st.subheader("Model Performance")
-        st.markdown("""
-        The following charts show the performance metrics of our models:
-        """)
-
-        # Image model performance metrics
-        st.subheader("Image Detection Model Performance")
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.markdown("**Confusion Matrix**")
-            confusion_img = np.array([[0.82, 0.18], [0.15, 0.85]])
-            fig = px.imshow(
-                confusion_img,
-                labels=dict(x="Predicted", y="Actual", color="Value"),
-                x=['REAL', 'FAKE'],
-                y=['REAL', 'FAKE'],
-                color_continuous_scale='Blues',
-                text_auto=True
-            )
-            st.plotly_chart(fig, use_container_width=True)
-        
-        with col2:
-            st.markdown("**Performance Metrics**")
-            metrics_data = {
-                'Metric': ['Accuracy', 'Precision', 'Recall', 'F1 Score'],
-                'Value': [0.82, 0.85, 0.82, 0.83]
-            }
-            fig = px.bar(
-                metrics_data, 
-                x='Metric', 
-                y='Value',
-                color='Metric',
-                color_discrete_map={
-                    'Accuracy': 'blue',
-                    'Precision': 'green',
-                    'Recall': 'orange',
-                    'F1 Score': 'purple'
-                }
-            )
-            fig.update_layout(yaxis_range=[0, 1])
-            st.plotly_chart(fig, use_container_width=True)
-
-        # Video model performance metrics
-        st.subheader("Video Detection Model Performance")
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.markdown("**Confusion Matrix**")
-            confusion_vid = np.array([[0.80, 0.20], [0.20, 0.80]])
-            fig = px.imshow(
-                confusion_vid,
-                labels=dict(x="Predicted", y="Actual", color="Value"),
-                x=['REAL', 'FAKE'],
-                y=['REAL', 'FAKE'],
-                color_continuous_scale='Blues',
-                text_auto=True
-            )
-            st.plotly_chart(fig, use_container_width=True)
-        
-        with col2:
-            st.markdown("**Performance Metrics**")
-            metrics_data = {
-                'Metric': ['Accuracy', 'Precision', 'Recall', 'F1 Score'],
-                'Value': [0.80, 0.80, 0.80, 0.80]
-            }
-            fig = px.bar(
-                metrics_data, 
-                x='Metric', 
-                y='Value',
-                color='Metric',
-                color_discrete_map={
-                    'Accuracy': 'blue',
-                    'Precision': 'green',
-                    'Recall': 'orange',
-                    'F1 Score': 'purple'
-                }
-            )
-            fig.update_layout(yaxis_range=[0, 1])
-            st.plotly_chart(fig, use_container_width=True)
+    # Style selection
+    selected_style = st.selectbox("Style", ["None"] + available_styles if available_styles else ["Fooocus V2", "cinematic", "realistic"])
+    
+    # Aspect ratio
+    aspect_ratios = [
+        "704×1408 <span style=\"color: grey;\"> ∣ 1:2</span>",
+        "832×1216 <span style=\"color: grey;\"> ∣ 13:19</span>",
+        "896×1152 <span style=\"color: grey;\"> ∣ 7:9</span>",
+        "1024×1024 <span style=\"color: grey;\"> ∣ 1:1</span>",
+        "1152×896 <span style=\"color: grey;\"> ∣ 9:7</span>",
+        "1216×832 <span style=\"color: grey;\"> ∣ 19:13</span>",
+        "1408×704 <span style=\"color: grey;\"> ∣ 2:1</span>"
+    ]
+    aspect_ratio = st.selectbox("Aspect Ratio", aspect_ratios)
+    
+    # Performance mode
+    performance = st.radio("Performance", ["Speed", "Quality", "Extreme Speed"])
+    
+    # Image settings
+    col1, col2 = st.columns(2)
+    with col1:
+        image_number = st.slider("Number of Images", 1, 8, 1)
+    with col2:
+        use_random_seed = st.checkbox("Random Seed", True)
+    
+    if not use_random_seed:
+        seed = st.text_input("Seed", "12345")
+    else:
+        seed = str(time.time()).replace('.', '')[:10]
+    
+    # Generate button
+    generate_button = st.button("Generate Image", type="primary")
+    
+    # Display generated images
+    if generate_button:
+        if not prompt:
+            st.error("Please enter a prompt")
+        else:
+            with st.spinner("Generating image..."):
+                result = generate_image(
+                    client=client,
+                    prompt=prompt,
+                    negative_prompt=negative_prompt,
+                    style=selected_style if selected_style != "None" else "",
+                    aspect_ratio=aspect_ratio,
+                    performance=performance,
+                    image_number=image_number,
+                    seed=seed,
+                    use_random_seed=use_random_seed
+                )
+                
+                if result:
+                    # The result should contain image paths or data
+                    # This will depend on the actual API response format
+                    st.success("Image generated successfully!")
+                    
+                    # Try to display the result
+                    try:
+                        # This is a placeholder - you'll need to adjust based on actual response format
+                        if isinstance(result, list) and len(result) > 0:
+                            for i, img_path in enumerate(result):
+                                st.image(img_path, caption=f"Generated Image {i+1}")
+                        elif isinstance(result, str):
+                            st.image(result, caption="Generated Image")
+                        else:
+                            st.json(result)
+                    except Exception as e:
+                        st.error(f"Error displaying image: {str(e)}")
+                        st.write("Raw result:")
+                        st.write(result)
 
 if __name__ == "__main__":
     main()
