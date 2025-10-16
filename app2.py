@@ -13,7 +13,7 @@ st.set_page_config(
 @st.cache_resource
 def get_client():
     try:
-        return Client("https://c452d26a281d4a0cde.gradio.live/")
+        return Client("https://faf7c5ec7c92e2ba15.gradio.live")
     except Exception as e:
         st.error(f"Failed to connect to Gradio client: {e}")
         return None
