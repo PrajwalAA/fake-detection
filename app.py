@@ -16,7 +16,7 @@ st.set_page_config(
 # Initialize the client
 @st.cache_resource
 def get_client():
-    return Client("https://c452d26a281d4a0cde.gradio.live/")
+    return Client("https://faf7c5ec7c92e2ba15.gradio.live/")
 
 # Function to generate image
 def generate_image(client, prompt, negative_prompt, style, aspect_ratio, 
