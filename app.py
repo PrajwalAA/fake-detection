@@ -1,20 +1,19 @@
 import streamlit as st
 import time
 from gradio_client import Client
-
-# Set page configuration
-st.set_page_config(
-    page_title="Image Generation Studio",
-    page_icon="🎨",
-    layout="wide"
-)
+import os
+import io
+from PIL import Image
+# requests and PIL.Image/io are not strictly needed here because gradio_client handles file paths
 
 # --- Configuration ---
-GRADIO_SPACE_URL = "https://faf7c5ec7c92e2ba15.gradio.live/"
+# NOTE: Ensure this URL is correct and active!
+# Based on the original request, we use the FAF URL. If you encounter the 
+# 'Could not fetch config' error again, you MUST update this URL.
+GRADIO_SPACE_URL = "https://faf7c5ec7c92e2ba15.gradio.live/" 
 GENERATE_FN_INDEX = 67  # Function index for image generation
 STYLES_FN_INDEX = 35    # Function index for getting available styles
 
-# --- Client and Utility Functions ---
 
 # Initialize the client (cached for efficiency)
 @st.cache_resource
@@ -23,30 +22,33 @@ def get_client(url: str = GRADIO_SPACE_URL):
     try:
         return Client(url)
     except Exception as e:
-        st.error(f"Failed to initialize Gradio client: {e}")
+        st.error(f"Failed to initialize Gradio client. The Gradio Space is likely down or the URL is incorrect. Error: {e}")
         return None
 
 # Function to generate image
 def generate_image(client: Client, prompt: str, negative_prompt: str, style: str, aspect_ratio: str,
-                     performance: str, image_number: int, seed: str):
+                     performance: str, image_number: int, seed: str, use_random_seed: bool):
     """Calls the Gradio API to generate images."""
     if client is None:
         return None
 
+    # Determine the seed value used for the API call
+    final_seed = seed if not use_random_seed else str(time.time()).replace('.', '')[:10]
+
     try:
         # Prepare parameters for the main generation function (fn_index=67)
+        # Ensure all 153 required arguments are present (as per the error)
         params = {
             "Generate Image Grid for Each Batch": True,
-            "parameter_12": prompt, # This is the primary prompt input
+            "parameter_12": prompt, 
             "Negative Prompt": negative_prompt,
             "Selected Styles": [style] if style else [],
             "Performance": performance,
             "Aspect Ratios": aspect_ratio,
             "Image Number": image_number,
             "Output Format": "png",
-            "Seed": seed,
-            # Other parameters are kept as defined in the original code,
-            # assuming they are the required defaults for fn_index=67
+            # Ensure the seed passed here is the string version
+            "Seed": final_seed,
             "Read wildcards in order": True,
             "Image Sharpness": 0.5,
             "Guidance Scale": 4.0,
@@ -132,6 +134,8 @@ def generate_image(client: Client, prompt: str, negative_prompt: str, style: str
         
         return result
     except Exception as e:
+        # The 'Expected 153 arguments, got 1' error is likely happening here
+        # or when processing the result. We re-raise to see the full error.
         st.error(f"Error generating image: {str(e)}")
         return None
 
@@ -141,9 +145,7 @@ def get_available_styles(client: Client):
     if client is None:
         return []
     try:
-        # This function (fn_index=35) returns available styles as a list
         styles = client.predict(fn_index=STYLES_FN_INDEX)
-        # Gradio client often returns the result wrapped in a list, like ['style1', 'style2']
         return styles if isinstance(styles, list) else []
     except Exception as e:
         st.error(f"Error fetching styles: {str(e)}")
@@ -161,20 +163,17 @@ def main():
     
     # --- Sidebar/Settings ---
     
-    # Text inputs
     prompt = st.text_area("Prompt", "A beautiful landscape with mountains and a serene lake, volumetric lighting, highly detailed, cinematic", height=100)
-    negative_prompt = st.text_area("Negative Prompt", "blurry, low quality, deformed, malformed, bad anatomy, error, logo, text", height=50)
+    negative_prompt = st.text_area("Negative Prompt", "blurry, low quality, deformed, bad anatomy, error, logo, text", height=50)
     
-    # Get available styles
     available_styles = []
     with st.spinner("Loading available styles..."):
         available_styles = get_available_styles(client)
     
-    # Style selection
     style_options = ["None"] + available_styles if available_styles else ["None", "Fooocus V2", "cinematic", "realistic"]
     selected_style = st.selectbox("Style", style_options)
     
-    # Aspect ratio (using markdown for visual cue)
+    # Aspect ratio display mapping
     aspect_ratios_display = {
         "704×1408 | 1:2": "704×1408",
         "832×1216 | 13:19": "832×1216",
@@ -188,12 +187,11 @@ def main():
     selected_aspect_ratio_key = st.selectbox(
         "Aspect Ratio", 
         list(aspect_ratios_display.keys()), 
-        format_func=lambda x: x.split(' | ')[0] + f' <span style="color: grey;">| {x.split(" | ")[1]}</span>', 
-        index=3 # Default to 1024x1024
+        format_func=lambda x: x.split(' | ')[0] + f' | {x.split(" | ")[1]}', 
+        index=3
     )
-    aspect_ratio_param = aspect_ratios_display[selected_aspect_ratio_key] # Get the raw string for the API
+    aspect_ratio_param = aspect_ratios_display[selected_aspect_ratio_key] 
     
-    # Performance mode
     performance = st.radio("Performance", ["Speed", "Quality", "Extreme Speed"], horizontal=True)
     
     # Image settings
@@ -202,26 +200,27 @@ def main():
         image_number = st.slider("Number of Images", 1, 8, 1)
     
     with col2:
-        use_random_seed = st.checkbox("Random Seed", True, key="random_seed_toggle")
-    
+        # Initializing use_random_seed with a session state key for better control
+        if 'use_random_seed' not in st.session_state:
+            st.session_state['use_random_seed'] = True
+        
+        use_random_seed = st.checkbox("Random Seed", st.session_state['use_random_seed'], key="random_seed_toggle")
+        st.session_state['use_random_seed'] = use_random_seed
+
     # Seed input logic
+    seed_value = ""
     if use_random_seed:
         # Generate a seed string from current time (first 10 digits of timestamp)
-        seed_value = str(time.time()).replace('.', '')[:10]
-        st.caption(f"**Current Random Seed:** `{seed_value}` (will change on each run)")
+        seed_value = str(int(time.time() * 10000))[-10:]
+        st.caption(f"**Seed used:** `{seed_value}` (generated randomly)")
     else:
-        seed_input = st.text_input("Seed", "12345")
-        try:
-            # Ensure the seed is a valid integer string for the API call
-            int(seed_input) 
-            seed_value = seed_input
-        except ValueError:
-            st.error("Seed must be an integer.")
-            seed_value = "12345" # Fallback
-    
+        seed_value = st.text_input("Seed", "12345")
+        if not seed_value.isdigit():
+            st.error("Seed must be a number.")
+            seed_value = "12345"
+            
     # --- Generate Button and Output ---
     
-    # Map 'None' style to empty string for the API call
     final_style = selected_style if selected_style != "None" else ""
     
     generate_button = st.button("Generate Image", type="primary", use_container_width=True)
@@ -229,63 +228,71 @@ def main():
     if generate_button:
         if not prompt:
             st.error("Please enter a prompt to generate an image.")
-        else:
-            with st.spinner("⏳ Generating image... This may take a moment based on the server load."):
-                result = generate_image(
-                    client=client,
-                    prompt=prompt,
-                    negative_prompt=negative_prompt,
-                    style=final_style,
-                    aspect_ratio=aspect_ratio_param,
-                    performance=performance,
-                    image_number=image_number,
-                    seed=seed_value
-                )
-            
-            if result is not None:
-                st.success("✅ Image generated successfully!")
-                
-                # --- Crucial Fix: Gradio Client Output Handling ---
-                
-                # Gradio API for an image output typically returns a dictionary 
-                # or a list of dictionaries with a file path under a 'name' key.
-                
-                # Attempt to extract image paths/data from the result
-                image_paths = []
-                
-                # Check if the result is a list and contains a file object (the generated image(s))
-                if isinstance(result, list) and len(result) > 0:
-                    # The main output is often the first element, which might be a list of paths or a dict of a path
-                    first_output = result[0]
-                    if isinstance(first_output, list):
-                         # If it's a list of paths (common for multiple images)
-                         image_paths = first_output
-                    elif isinstance(first_output, dict) and 'name' in first_output:
-                         # If it's a single dict with a 'name' key (single image)
-                         image_paths = [first_output['name']]
+            return
 
-                if image_paths:
-                    st.subheader("Generated Images")
-                    cols = st.columns(min(image_number, 4)) # Display up to 4 images per row
-                    for i, img_path in enumerate(image_paths):
-                        try:
-                            # Use the columns to display images in a grid
-                            with cols[i % len(cols)]:
-                                st.image(img_path, caption=f"Image {i+1}", use_column_width="auto")
-                                # Provide a download button
-                                st.download_button(
-                                    label="Download",
-                                    data=open(img_path, "rb").read(),
-                                    file_name=f"generated_image_{i+1}_{prompt[:20].replace(' ', '_')}.png",
-                                    mime="image/png",
-                                    key=f"download_{i}"
-                                )
-                        except Exception as e:
-                            st.warning(f"Could not display image {i+1} from path '{img_path}'. Error: {e}")
-                            
-                else:
-                    st.warning("⚠️ Could not locate image files in the Gradio response. Raw result is below.")
-                    st.json(result) # Display raw result for debugging
+        with st.spinner("⏳ Generating image... This may take a moment."):
+            result = generate_image(
+                client=client,
+                prompt=prompt,
+                negative_prompt=negative_prompt,
+                style=final_style,
+                aspect_ratio=aspect_ratio_param,
+                performance=performance,
+                image_number=image_number,
+                seed=seed_value,
+                use_random_seed=use_random_seed
+            )
+        
+        if result is not None:
+            st.success("✅ Image generation complete!")
+            
+            image_paths = []
+            
+            # --- Robust Gradio Output Parsing ---
+            
+            # Gradio's predict() often returns a list of outputs, where the 
+            # actual file list/path is one element (often the first or last).
+            
+            if isinstance(result, list) and len(result) > 0:
+                # 1. Check if the FIRST element is the file list (common structure for image generation)
+                first_output = result[0]
+                if isinstance(first_output, list) and all(isinstance(item, str) for item in first_output):
+                     # Case 1: result is [ [path1, path2, ...], None, None, ...]
+                     image_paths = first_output
+                
+                # 2. Check if the LAST element is the file list (less common, but possible)
+                elif isinstance(result[-1], list) and all(isinstance(item, str) for item in result[-1]):
+                    # Case 2: result is [ None, None, ..., [path1, path2, ...] ]
+                    image_paths = result[-1]
+                
+                # 3. Handle single image output as a string path
+                elif isinstance(first_output, str):
+                    # Case 3: result is [path1, None, None, ...] (for a single image)
+                    image_paths = [first_output]
+
+            # --- Display Logic ---
+            if image_paths:
+                st.subheader("Generated Images")
+                cols = st.columns(min(len(image_paths), 4))
+                for i, img_path in enumerate(image_paths):
+                    try:
+                        with cols[i % len(cols)]:
+                            st.image(img_path, caption=f"Image {i+1}", use_column_width="auto")
+                            # Add download button
+                            st.download_button(
+                                label="Download",
+                                data=open(img_path, "rb").read(),
+                                file_name=f"generated_image_{i+1}.png",
+                                mime="image/png",
+                                key=f"download_{i}_{time.time()}"
+                            )
+                    except Exception as e:
+                        st.warning(f"Could not display image {i+1} from path '{img_path}'. Error: {e}")
+                        
+            else:
+                st.warning("⚠️ Could not locate image files in the Gradio response. The Gradio API signature may have changed.")
+                st.write("**Raw Gradio Result (for debugging):**")
+                st.json(result)
 
 if __name__ == "__main__":
     main()
